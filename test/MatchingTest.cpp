@@ -4,7 +4,7 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include "grammar.h"
+#include "jsgfkitxx/Grammar.hpp"
 
 using namespace std;
 
