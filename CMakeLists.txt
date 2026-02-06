@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.0)
+option(BUILD_SHARED_LIBS "Build using shared libraries" ON)
 
 project(jsgfkitxx
 	VERSION 1.1
@@ -23,7 +24,11 @@ set(JSGF_KIT_XX_SOURCES
     src/RuleReference.cpp
 )
 
-add_library(jsgfkitxx STATIC ${JSGF_KIT_XX_SOURCES})
+if(BUILD_SHARED_LIBS)
+  add_library(jsgfkitxx SHARED ${JSGF_KIT_XX_SOURCES})
+else()
+  add_library(jsgfkitxx STATIC ${JSGF_KIT_XX_SOURCES})
+endif()
 target_include_directories(jsgfkitxx PUBLIC ${PROJECT_SOURCE_DIR}/include)
 
 include(GNUInstallDirs)
