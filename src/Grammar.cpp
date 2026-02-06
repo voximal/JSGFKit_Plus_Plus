@@ -1,5 +1,19 @@
 #include "jsgfkitxx/Grammar.hpp"
 #include <sstream>
+#include <functional>
+
+static std::string joinWords(std::string words[], unsigned int start, unsigned int count)
+{
+    if (count == 0) return "";
+    std::ostringstream oss;
+    for (unsigned int i = 0; i < count; ++i)
+    {
+        if (i != 0) oss << " ";
+        oss << words[start + i];
+    }
+    return oss.str();
+}
+
 using namespace std;
 
 std::regex Grammar::specialCharacterRegex  = std::regex("[;=<>*+\\[\\]()|{} ]"); /// Regex that matches for JSGF special characters that cannot be unescaped in non-quoted Tokens
@@ -147,6 +161,7 @@ std::string Grammar::getMatchingPublicRule(std::string test) const {
     test = Grammar::replaceAll(test, " {2,}", " ");
     for(shared_ptr<Rule> r : rules) {
         if(r->isPublic()) {
+        printf("DBG matchesRules with %s\n", r->getRuleName().c_str());
         MatchVector m = matchesRule(r, test);
             if(m.size() != 0) {
                 return r->getRuleName();
@@ -289,6 +304,16 @@ void Grammar::parseUnaryOperators(const vector<Expansion *> & expansions, vector
             if (expansionFound)
             {
                 UnparsedSection * up = (UnparsedSection *) *expansionIterator;
+                // Wildcards: treat standalone "_" / "~" as literal tokens
+                if (up->getSection() == "_" || up->getSection() == "~")
+                {
+                    printf("DBG parseUnaryOperators _ or ~ push et traitement\n");
+                    tempExp.push_back(new Token(up->getSection()));
+                    expansionFound = false;
+                    expansionIterator++;
+                    continue;
+                }
+
                 if (Grammar::stringStartsWith(up->getSection(), "*"))   // Kleene star operator
                 {
                     KleeneStar *ks = new KleeneStar(shared_ptr<Expansion>(selectedExpansion));
@@ -802,6 +827,8 @@ vector<Expansion *> Grammar::parseTokensFromString(std::string part)
     bool tokenMode = false; // If True, test and add the following characters to the currentToken string
     string currentToken;
     unsigned int stringLength = part.size();
+    
+    printf("DBG parseTokensFromString (%s)\n", part.c_str());
 
     char * charArray = new char [stringLength + 1];
     strncpy(charArray, part.c_str(), stringLength);
@@ -814,15 +841,31 @@ vector<Expansion *> Grammar::parseTokensFromString(std::string part)
         tokenMode = false;
         currentToken = ""; // This holds the string of characters that are being scanned into one Token
         a = charArray[position];
+        
+        printf("DBG parseTokensFromString position=%d (%c)\n", position, a);
 
         while (!tokenMode && position < stringLength)
         {
             a = charArray[position];
+            
+            printf("DBG parseTokensFromString while position=%d (%c)\n", position, a);
+                    
             if(!Grammar::isSpecialCharacter(a))
             {
-                UnparsedSection * up = new UnparsedSection();
-                up->setSection(Grammar::trimString(passed));
-                exp.push_back(up);
+                std::string trimmedPassed = Grammar::trimString(passed);
+                if (trimmedPassed == "_" || trimmedPassed == "~")
+                {
+                    printf("DBG parseTokensFromString _ ou ~ detected, Token cree..\n");
+                
+                    Token * wt = new Token(trimmedPassed);
+                    exp.push_back(wt);
+                }
+                else
+                {
+                    UnparsedSection * up = new UnparsedSection();
+                    up->setSection(trimmedPassed);
+                    exp.push_back(up);
+                }
                 passed = "";
                 tokenMode = true;
                 //DO NOT INCREMENT THE POSITION COUNTER, WE ARE LETTING THE NEXT LOOP EVALUATE THIS CHARACTER
@@ -918,9 +961,19 @@ vector<Expansion *> Grammar::parseTokensFromString(std::string part)
 
     if (!tokenMode)   // We reached the end of the string without finding a token, so add what we passed over
     {
-        UnparsedSection * up = new UnparsedSection();
-        up->setSection(Grammar::trimString(passed));
-        exp.push_back(up);
+        std::string trimmedPassed = Grammar::trimString(passed);
+        if (trimmedPassed == "_" || trimmedPassed == "~")
+        {
+            printf("DBG parseTokensFromString trimmedPassed avec _ ou ~\n");
+            Token * wt = new Token(trimmedPassed);
+            exp.push_back(wt);
+        }
+        else
+        {
+            UnparsedSection * up = new UnparsedSection();
+            up->setSection(trimmedPassed);
+            exp.push_back(up);
+        }
     }
 
     Grammar::trimUnparsedSections(exp);
@@ -1113,10 +1166,43 @@ vector<shared_ptr<MatchInfo>> Grammar::getMatchingExpansions(shared_ptr<Expansio
 
     if (EXPANSION_IS_TOKEN(e))
     {
+        printf("DBG getMatchingExpansions EXPANSION_IS_TOKEN\n");
+        
         Token * t = (Token *) e.get();
-        if (t->getText() == (words[wordPosition]))
+        const std::string tokenText = t->getText();
+
+        // Wildcard "_" matches exactly one word
+        if (tokenText == "_")
         {
-            string matchedPart = words[wordPosition];
+            printf("DBG getMatchingExpansions Token _\n");
+            if (wordPosition < wordCount)
+            {
+                printf("DBG getMatchingExpansions matchVector.push_back _ wordPosition=%d wordCount=%d\n", wordPosition, wordCount);
+                printf("DBG getMatchingExpansions matchVector.push_back _\n");
+                matchVector.push_back(shared_ptr<MatchInfo>(new MatchInfo(shared_ptr<Expansion>(e), words[wordPosition])));
+            }
+        }
+        // Wildcard "~" matches zero or more words (greedy by default when not backtracking inside a Sequence)
+        else if (tokenText == "~")
+        {
+            printf("DBG getMatchingExpansions Token ~\n");
+            if (wordPosition <= wordCount)
+            {
+                unsigned int remaining = (wordPosition >= wordCount) ? 0 : (wordCount - wordPosition);
+                printf("DBG getMatchingExpansions matchVector.push_back _ wordPosition=%d wordCount=%d\n", wordPosition, wordCount);
+                printf("DBG getMatchingExpansions matchVector.push_back _ remaining=%d\n", remaining);
+                
+                for (unsigned int i = 0; i < remaining; ++i)
+                {
+                    matchVector.push_back(shared_ptr<MatchInfo>(new MatchInfo(shared_ptr<Expansion>(e), words[wordPosition + i])));
+                }
+                
+                //matchVector.push_back(shared_ptr<MatchInfo>(new MatchInfo(shared_ptr<Expansion>(e), joinWords(words, wordPosition, remaining))));
+            }
+        }
+        else if (tokenText == (words[wordPosition]))
+        {
+            printf("DBG getMatchingExpansions tokenText(%s) ==  words[wordPosition](%s)\n", tokenText.c_str(), words[wordPosition].c_str());
             matchVector.push_back(shared_ptr<MatchInfo>(new MatchInfo(shared_ptr<Expansion>(e), words[wordPosition])));
         }
         else
@@ -1124,13 +1210,18 @@ vector<shared_ptr<MatchInfo>> Grammar::getMatchingExpansions(shared_ptr<Expansio
             // No match
         }
     }
+
     else if (EXPANSION_IS_RULE_REFERENCE(e))
     {
+        printf("DBG getMatchingExpansions EXPANSION_IS_RULE_REFERENCE\n");
+        
         RuleReference * ref = (RuleReference *) e.get();
 
         Rule * rule = getRule(ref->getRuleName()).get(); // Try to get the rule
         if(rule)
         {
+            printf("DBG getMatchingExpansions rule name=%s string=%s\n", ref->getRuleName().c_str(), rule->getRuleString().c_str()); 
+        
             vector<shared_ptr<MatchInfo>> m1 = (getMatchingExpansions(rule->getRuleExpansion(), words, wordCount, wordPosition));
             if (m1.size() != 0)
             {
@@ -1141,6 +1232,8 @@ vector<shared_ptr<MatchInfo>> Grammar::getMatchingExpansions(shared_ptr<Expansio
     }
     else if (EXPANSION_IS_OPTIONAL_GROUPING(e))
     {
+        printf("DBG getMatchingExpansions EXPANSION_IS_OPTIONAL_GROUPING\n");
+        
         OptionalGrouping * og = (OptionalGrouping *) e.get();
         vector<shared_ptr<MatchInfo>> m1 = getMatchingExpansions(og->getChild(), words, wordCount, wordPosition);
         if (m1.size() == 0)
@@ -1157,6 +1250,8 @@ vector<shared_ptr<MatchInfo>> Grammar::getMatchingExpansions(shared_ptr<Expansio
     }
     else if (EXPANSION_IS_REQUIRED_GROUPING(e))
     {
+        printf("DBG getMatchingExpansions EXPANSION_IS_REQUIRED_GROUPING\n");
+        
         RequiredGrouping * rg = (RequiredGrouping *) e.get();
         vector<shared_ptr<MatchInfo>> m1 = getMatchingExpansions(rg->getChild(), words, wordCount, wordPosition);
 
@@ -1168,6 +1263,8 @@ vector<shared_ptr<MatchInfo>> Grammar::getMatchingExpansions(shared_ptr<Expansio
     }
     else if (EXPANSION_IS_TAG(e))
     {
+        printf("DBG getMatchingExpansions EXPANSION_IS_TAG\n");
+    
         Tag * t = (Tag *) e.get();
         vector<shared_ptr<MatchInfo>> m1 = getMatchingExpansions(t->getChild(), words, wordCount, wordPosition);
 
@@ -1179,6 +1276,7 @@ vector<shared_ptr<MatchInfo>> Grammar::getMatchingExpansions(shared_ptr<Expansio
     }
     else if (EXPANSION_IS_ALTERNATE_SET(e))
     {
+        printf("DBG getMatchingExpansions EXPANSION_IS_ALTERNATE_SET\n");
         AlternativeSet * as = (AlternativeSet *) e.get();
         for (shared_ptr<Expansion> x : as->getChildren())
         {
@@ -1199,53 +1297,108 @@ vector<shared_ptr<MatchInfo>> Grammar::getMatchingExpansions(shared_ptr<Expansio
     }
     else if (EXPANSION_IS_SEQUENCE(e))
     {
+        printf("DBG getMatchingExpansions EXPANSION_IS_SEQUENCE\n");
+        
         Sequence * seq = (Sequence *) e.get();
         vector<shared_ptr<MatchInfo>> localMatchVector;
         vector<shared_ptr<Expansion>> expansions = seq->getChildren();
-        unsigned int matchedCount = 0;
 
+        // Count required matches (ignore optional groupings and kleene stars like the original logic)
+        unsigned int requiredMatched = 0;
         for (shared_ptr<Expansion> x : expansions)
         {
-            vector<shared_ptr<MatchInfo>> m1 = getMatchingExpansions(x, words, wordCount, wordPosition);
-            if (m1.size() == 0 && (EXPANSION_IS_KLEENE_STAR(x) || EXPANSION_IS_OPTIONAL_GROUPING(x)))   // Stupid OptionalGrouping
+            if (!EXPANSION_IS_OPTIONAL_GROUPING(x) && !EXPANSION_IS_KLEENE_STAR(x))
             {
-                matchedCount++; // Still counts a match
-                continue;
+                requiredMatched++;
+            }
+        }
+
+        // Backtracking matcher to support the "~" wildcard anywhere in the sequence
+        std::function<bool(size_t, unsigned int, unsigned int, vector<shared_ptr<MatchInfo>>&)> matchFrom;
+        matchFrom = [&](size_t idx, unsigned int wp, unsigned int matchedCount, vector<shared_ptr<MatchInfo>>& acc) -> bool
+        {
+            if (idx >= expansions.size())
+            {
+                return matchedCount >= requiredMatched;
+            }
+
+            shared_ptr<Expansion> x = expansions[idx];
+
+            // Special-case: token "~" (zero or more words), try greedy then backtrack
+            if (EXPANSION_IS_TOKEN(x))
+            {
+                Token * t = (Token *) x.get();
+                if (t->getText() == "~")
+                {
+                    unsigned int maxConsume = (wp <= wordCount) ? (wordCount - wp) : 0;
+                    
+                    printf("DBG getMatchingExpansions maxConsume=%d\n", maxConsume);
+
+                    for (unsigned int k = maxConsume;; --k)
+                    {
+                        printf("DBG getMatchingExpansions k=%d\n", k);
+                        printf("DBG getMatchingExpansions matchVector.push_back ~ wp=%d k=%d\n", wp, k);
+                    
+                        vector<shared_ptr<MatchInfo>> nextAcc = acc;
+                        
+                        for (unsigned int i = 0; i < k; ++i)
+                        {
+                            nextAcc.push_back(shared_ptr<MatchInfo>(new MatchInfo(shared_ptr<Expansion>(x), words[wp + i])));
+                        }
+                        
+                        //nextAcc.push_back(shared_ptr<MatchInfo>(new MatchInfo(shared_ptr<Expansion>(x), joinWords(words, wp, k))));
+
+                        if (matchFrom(idx + 1, wp + k, matchedCount + 1, nextAcc))
+                        {
+                            acc.swap(nextAcc);
+                            
+                            printf("DBG getMatchingExpansions ~ match\n");
+                            return true;
+                        }
+
+                        if (k == 0) break;
+                    }
+                    printf("DBG getMatchingExpansions ~ no match\n");
+                    return false;
+                }
+            }
+
+            printf("DBG getMatchingExpansions call wordCount(%d), wp(%d)\n", wordCount, wp);
+            vector<shared_ptr<MatchInfo>> m1 = getMatchingExpansions(x, words, wordCount, wp);
+
+            if (m1.size() == 0 && (EXPANSION_IS_KLEENE_STAR(x) || EXPANSION_IS_OPTIONAL_GROUPING(x))) // optional constructs
+            {
+                // Still counts a match
+                return matchFrom(idx + 1, wp, matchedCount + 1, acc);
             }
 
             if (m1.size() != 0)
             {
-                matchedCount++;
+                unsigned int nextWp = wp;
                 for (shared_ptr<MatchInfo> localMatch : m1)
                 {
-                    if(localMatch->getMatchingSection() != "")
+                    if (localMatch->getMatchingSection() != "")
                     {
-                        wordPosition += Grammar::splitString(localMatch->getMatchingSection(), " ").size();
+                        nextWp += Grammar::splitString(localMatch->getMatchingSection(), " ").size();
                     }
                 }
-                localMatchVector.insert(localMatchVector.end(), m1.begin(), m1.end()); // Found a match! Add it to the vector
-            }
-            else   // Doesn't match! Sequence aborted.
-            {
-                localMatchVector.clear();
-                break;
+
+                vector<shared_ptr<MatchInfo>> nextAcc = acc;
+                nextAcc.insert(nextAcc.end(), m1.begin(), m1.end());
+
+                if (matchFrom(idx + 1, nextWp, matchedCount + 1, nextAcc))
+                {
+                    acc.swap(nextAcc);
+                    return true;
+                }
             }
 
-            if (wordPosition > wordCount - 1)   // Sequence is longer than provided words! Abort!
-            {
-                break;
-            }
-        }
+            return false;
+        };
 
-	unsigned int requiredMatched = 0;
-	for(shared_ptr<Expansion> x : expansions) {
-		if(!EXPANSION_IS_OPTIONAL_GROUPING(x) && !EXPANSION_IS_KLEENE_STAR(x)) {
-			requiredMatched++;
-		}
-	}
+        bool ok = matchFrom(0, wordPosition, 0, localMatchVector);
 
-	//std::cout << "Needed: " << seq->childCount() << " Got: " << matchedCount << std::endl;
-        if (matchedCount < requiredMatched)   // Not all of the required matches were met!
+        if (!ok)
         {
             localMatchVector.clear();
         }
@@ -1256,8 +1409,11 @@ vector<shared_ptr<MatchInfo>> Grammar::getMatchingExpansions(shared_ptr<Expansio
             matchVector.insert(matchVector.end(), localMatchVector.begin(), localMatchVector.end());
         }
     }
+
     else if (EXPANSION_IS_KLEENE_STAR(e))
     {
+        printf("DBG getMatchingExpansions EXPANSION_IS_KLEENE_STAR\n");
+    
         KleeneStar * ks = (KleeneStar *) e.get();
         bool done = false;
         vector<shared_ptr<MatchInfo>> m1;
@@ -1291,6 +1447,8 @@ vector<shared_ptr<MatchInfo>> Grammar::getMatchingExpansions(shared_ptr<Expansio
     }
     else if (EXPANSION_IS_PLUS_OPERATOR(e))
     {
+        printf("DBG getMatchingExpansions EXPANSION_IS_PLUS_OPERATOR\n");
+    
         PlusOperator * po = (PlusOperator *) e.get();
         bool done = false;
         vector<shared_ptr<MatchInfo>> m1;
@@ -1321,6 +1479,12 @@ vector<shared_ptr<MatchInfo>> Grammar::getMatchingExpansions(shared_ptr<Expansio
             }
         }
     }
+    
+    //printf("DBG getMatchingExpansions matchVector = %d\n",matchVector);
+    
+    for (shared_ptr<MatchInfo> mi2 : matchVector) {
+	      //std::cout << "DBG getMatchingExpansions " << mi2->getMatchingSection() << ", " << printExpansionType(mi2->getExpansion().get()) << std::endl;
+    }
 
     return matchVector;
 }
@@ -1339,7 +1503,7 @@ vector<shared_ptr<MatchInfo>> Grammar::matchesRule(const shared_ptr<Rule> rule, 
     vector<shared_ptr<MatchInfo>> m1 = getMatchingExpansions(rule->getRuleExpansion(), wordArray, words.size(), 0);
     unsigned int matchCount = 0;
     for (shared_ptr<MatchInfo> mi2 : m1) {
-	//std::cout << "MI: " << mi2->getMatchingSection() << ", " << matchCount << ", " << printExpansionType(mi2->getExpansion().get()) << std::endl;
+	      //std::cout << "MI: " << mi2->getMatchingSection() << ", " << matchCount << ", " << printExpansionType(mi2->getExpansion().get()) << std::endl;
 
         if (mi2->getMatchingSection() != "") {
             matchCount++;
@@ -1499,14 +1663,14 @@ std::string Grammar::printExpansionType(Expansion * e) {
 // trim from start
 inline std::string &Grammar::ltrim(std::string &s) {
     s.erase(s.begin(), std::find_if(s.begin(), s.end(),
-        [](unsigned char c) { return !std::isspace(c); }));
+            std::not1(std::ptr_fun<int, int>(std::isspace))));
     return s;
 }
 
 // trim from end
 inline std::string &Grammar::rtrim(std::string &s) {
     s.erase(std::find_if(s.rbegin(), s.rend(),
-        [](unsigned char c) { return !std::isspace(c); }).base(), s.end());
+            std::not1(std::ptr_fun<int, int>(std::isspace))).base(), s.end());
     return s;
 }
 
