@@ -38,6 +38,11 @@ file(GLOB KIT_HEADERS "include/jsgfkitxx/*.hpp")
 # Create library
 if(BUILD_SHARED_LIBS)
   add_library(jsgfkitxx SHARED ${JSGF_KIT_XX_SOURCES})
+  # Set library version
+  set_target_properties(jsgfkitxx PROPERTIES
+    VERSION 1.1.0
+    SOVERSION 1
+  )
 else()
   add_library(jsgfkitxx STATIC ${JSGF_KIT_XX_SOURCES})
 endif()
